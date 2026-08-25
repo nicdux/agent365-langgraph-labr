@@ -7,6 +7,8 @@ O objetivo não é o agente. O objetivo é provar, com evidência técnica, que 
 agente **desenvolvido por você**, rodando fora das plataformas de agente da
 Microsoft, recebe identidade no Microsoft Entra, aparece no Agent Registry e
 tem sua atividade observada pelo Defender e pelo Purview.
+<img width="779" height="895" alt="image" src="https://github.com/user-attachments/assets/8fa05f38-e8c7-49d6-bff8-2cbfa4cfaec8" />
+<img width="523" height="428" alt="image" src="https://github.com/user-attachments/assets/35e17927-a189-4c98-8742-fd18049b7ce7" />
 
 ---
 
