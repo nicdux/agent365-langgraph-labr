@@ -1,0 +1,23 @@
+# Segredos - NUNCA versionar
+.env
+*.env
+!.env.template
+a365.config.json
+a365.generated.config.json
+appsettings.json
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Editores
+.vscode/
+.idea/
+
+# Sistema
+.DS_Store
+Thumbs.db

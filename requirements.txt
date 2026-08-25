@@ -1,0 +1,14 @@
+# Agente
+langchain-core
+langchain-openai
+langgraph
+requests
+python-dotenv
+
+# Azure
+azure-identity
+
+# Microsoft Agent 365
+microsoft-agents-a365-runtime
+microsoft-agents-a365-observability-core
+microsoft-agents-a365-observability-extensions-langchain
