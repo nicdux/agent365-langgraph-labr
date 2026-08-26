@@ -7,8 +7,6 @@ O objetivo não é o agente. O objetivo é provar, com evidência técnica, que 
 agente **desenvolvido por você**, rodando fora das plataformas de agente da
 Microsoft, recebe identidade no Microsoft Entra, aparece no Agent Registry e
 tem sua atividade observada pelo Defender e pelo Purview.
-<img width="779" height="895" alt="image" src="https://github.com/user-attachments/assets/8fa05f38-e8c7-49d6-bff8-2cbfa4cfaec8" />
-<img width="523" height="428" alt="image" src="https://github.com/user-attachments/assets/35e17927-a189-4c98-8742-fd18049b7ce7" />
 
 ---
 
@@ -283,6 +281,87 @@ neste laboratorio.
 
 ---
 
+## DLP do Purview — do audit ao bloqueio
+
+Até aqui o Purview **observa**: classifica o conteúdo e mostra a atividade no
+DSPM. Com uma política de DLP, ele passa a **decidir**: o `processContent`
+devolve `restrictAccess` e o agente recusa a requisição.
+
+### Por que via PowerShell, e não pelo portal
+
+O portal do Purview não permite criar essa política. No assistente de DLP, a
+location **Managed cloud apps** aparece sem caixa de seleção, bloqueada por dois
+pré-requisitos que o assistente exige para políticas de app gerenciado:
+*Conditional Access policy not found* e *Edge for business protection settings
+not found*.
+
+O caminho por PowerShell não depende de nenhum dos dois. Ele usa o enforcement
+plane `Application` — que substituiu o antigo `Entra` — e é o único cenário
+documentado pela Microsoft para apps registrados no Entra.
+
+### O ponto que faz a política não funcionar
+
+A política precisa escopar o **AppId que o código declara** em
+`protectedAppMetadata.applicationLocation` e no `protectionScopes/compute` —
+no `agent.py`, o `PURVIEW_CLIENT_APP_ID`.
+
+Escopar apenas o blueprint do agente **não funciona**: o Purview não encontra
+política aplicável, devolve "sem restrição" e o conteúdo passa. Sem erro, sem
+aviso, sem nada no log. É a mesma classe de falha silenciosa da telemetria.
+
+Na dúvida, coloque os dois no escopo — o app cliente do Purview e o blueprint.
+
+### Rodar
+
+```powershell
+Install-Module ExchangeOnlineManagement -Scope CurrentUser
+.\Create-DlpPolicyForAgent365Lab.ps1
+```
+
+Ajuste antes o bloco `$Applications` com os AppIds do seu tenant e o
+`$NotifyRecipients` com um e-mail real. Requer a função **Compliance
+Administrator** (ou Compliance Data Administrator).
+
+Para testar, rode o agente e use `/purview`. A resposta esperada é:
+
+```
+Agente > Sua mensagem foi bloqueada por uma politica do Microsoft Purview.
+```
+
+Se o agente responder normalmente, reinicie-o: o ETag do
+`protectionScopes/compute` fica em cache por uma hora, e uma sessão antiga
+continua usando o escopo de quando a política ainda não existia.
+
+### Erros do `New-DlpCompliancePolicy` neste cenário
+
+| Erro | Causa | Solução |
+|---|---|---|
+| `Locations input JSON is invalid ... requires a JSON array` | Com um único app, o PowerShell desembrulha o array e gera `{}` em vez de `[{}]` | `ConvertTo-Json -AsArray` |
+| `'StopPolicyProcessing' is supported only for Exchange, Teams` | Parâmetro não vale para a location `Applications` | Remova o parâmetro |
+| `'SiteAdmin' ... should be valid SMTP address` | `NotifyUser` não aceita a palavra-chave | Use um e-mail real; `SiteAdmin` só vale em `GenerateIncidentReport` |
+| `RestrictAccess actions 'DownloadText' are not supported` | `Applications` aceita `UploadText` de forma confiável | Restrinja apenas `UploadText` |
+| `The Compliance Policy ... has been deleted and cannot be modified` | A exclusão é assíncrona e o `Get-` ainda devolve o objeto | Crie com um nome novo em vez de esperar |
+| Política criada, mas nada é bloqueado | Escopo com o AppId errado | Escope o `PURVIEW_CLIENT_APP_ID` |
+
+Um detalhe do script: sem `-ErrorAction Stop` explícito, um erro de binding de
+parâmetro não interrompe a execução, e o script imprime "criada com sucesso"
+sobre uma política que nunca existiu.
+
+### A evidência
+
+O evento de `DLPRuleMatch` fica em **Purview → Data Loss Prevention → Alerts**.
+Vale abrir a atividade em detalhe: o registro correlaciona, num único evento, a
+identidade do agente (`AgentId`, `AgentName`), o usuário em nome de quem ele
+operou (`UserId`), o app (`AppIdentity`, na categoria `ConnectedAIApp.Entra`), o
+plano de enforcement (`EnforcementPlane: Application`), as ações executadas
+— incluindo `RestrictAccess` — e os valores detectados por tipo de informação
+sensível, com contagem e confiança.
+
+É esse registro que sustenta a afirmação de que o bloqueio foi decisão de
+política, e não comportamento do código.
+
+---
+
 ## Como a autenticação funciona
 
 
@@ -347,3 +426,4 @@ az group delete --name rg-a365-lab
 | `requirements.txt` | Dependências Python |
 | `.env.template` | Modelo de configuração |
 | `.gitignore` | Protege segredos |
+| `Create-DlpPolicyForAgent365Lab.ps1` | Cria a política de DLP do Purview escopada ao agente |
