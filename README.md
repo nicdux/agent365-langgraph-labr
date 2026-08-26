@@ -360,6 +360,9 @@ sensível, com contagem e confiança.
 É esse registro que sustenta a afirmação de que o bloqueio foi decisão de
 política, e não comportamento do código.
 
+O [EVIDENCIAS.md](EVIDENCIAS.md) lista, camada por camada, onde verificar cada
+evidência no seu tenant e quanto tempo cada uma leva para aparecer.
+
 ---
 
 ## Como a autenticação funciona
@@ -427,3 +430,4 @@ az group delete --name rg-a365-lab
 | `.env.template` | Modelo de configuração |
 | `.gitignore` | Protege segredos |
 | `Create-DlpPolicyForAgent365Lab.ps1` | Cria a política de DLP do Purview escopada ao agente |
+| `EVIDENCIAS.md` | Onde verificar cada evidência no seu tenant |
