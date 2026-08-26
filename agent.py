@@ -15,9 +15,12 @@ Comandos dentro do chat:
 """
 import os
 import sys
+import threading
 import time
 import unicodedata
 import uuid
+from contextvars import ContextVar
+from datetime import datetime, timezone
 
 import warnings
 
@@ -40,7 +43,10 @@ from microsoft_agents_a365.observability.core import (
     AgentDetails,
     InvokeAgentScope,
     InvokeAgentScopeDetails,
+    Channel,
+    OutputScope,
     Request,
+    Response,
     ServiceEndpoint,
     ExecuteToolScope,
     ToolCallDetails,
@@ -93,6 +99,19 @@ AGENT_EMAIL = os.environ.get("A365_AGENT_EMAIL", "")
 CALLER_USER_ID = os.environ.get("A365_CALLER_USER_ID", "")
 CALLER_USER_EMAIL = os.environ.get("A365_CALLER_USER_EMAIL", "")
 CALLER_USER_NAME = os.environ.get("A365_CALLER_USER_NAME", "")
+
+CANAL_TERMINAL = Channel(name="terminal")
+_conversa_atual = ContextVar("a365_conversation_id", default=None)
+
+
+def _criar_request(conteudo, conversa=None):
+    conversa = conversa or _conversa_atual.get()
+    return Request(
+        content=conteudo,
+        session_id=conversa,
+        channel=CANAL_TERMINAL,
+        conversation_id=conversa,
+    )
 
 
 def _validar_atribuicao():
@@ -257,6 +276,198 @@ CustomLangChainInstrumentor()
 
 
 # ---------------------------------------------------------------------------
+# Microsoft Purview - avaliacao de politica em tempo real
+# ---------------------------------------------------------------------------
+# Duas chamadas ao Microsoft Graph, documentadas em
+#   https://learn.microsoft.com/en-us/purview/developer/use-the-api
+#
+#   protectionScopes/compute  descobre quais politicas se aplicam ao usuario
+#   processContent            envia o conteudo e devolve a acao a executar
+#
+# Quando a resposta traz restrictAccess/block, o agente PRECISA bloquear.
+# Sem estas chamadas o Purview apenas audita; com elas, ele controla.
+PURVIEW_ENABLED = os.environ.get("PURVIEW_ENABLED", "false").lower() == "true"
+PURVIEW_FAIL_CLOSED = os.environ.get("PURVIEW_FAIL_CLOSED", "true").lower() == "true"
+PURVIEW_USER_ID = os.environ.get("PURVIEW_USER_ID", CALLER_USER_ID)
+PURVIEW_CLIENT_APP_ID = os.environ.get("PURVIEW_CLIENT_APP_ID", "")
+# Segredo proprio, nao AZURE_CLIENT_SECRET. Usar o nome AZURE_* faria o
+# DefaultAzureCredential adotar este app para TUDO, inclusive o Azure OpenAI,
+# provocando 401 PermissionDenied no modelo.
+PURVIEW_CLIENT_SECRET = os.environ.get("PURVIEW_CLIENT_SECRET", "")
+PURVIEW_GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
+PURVIEW_APP_VERSION = "1.0"
+MSG_PROMPT_BLOQUEADO = (
+    "Sua mensagem foi bloqueada por uma politica do Microsoft Purview."
+)
+MSG_RESPOSTA_BLOQUEADA = (
+    "A resposta do agente foi bloqueada por uma politica do Microsoft Purview."
+)
+
+_purview_lock = threading.Lock()
+_purview_scope_cache = {}
+_PURVIEW_SCOPE_TTL = 3600
+
+
+def _purview_token():
+    """Token app-only do app cliente registrado no Entra."""
+    token, _ = _post_token(
+        {
+            "client_id": PURVIEW_CLIENT_APP_ID,
+            "client_secret": PURVIEW_CLIENT_SECRET,
+            "scope": "https://graph.microsoft.com/.default",
+            "grant_type": "client_credentials",
+        },
+        "token do Graph para o Purview",
+    )
+    return token
+
+
+def _purview_headers():
+    return {
+        "Authorization": "Bearer " + _purview_token(),
+        "Content-Type": "application/json",
+        "Client-Request-Id": str(uuid.uuid4()),
+    }
+
+
+def _purview_compute_scopes(user_id, forcar=False):
+    """Descobre as politicas aplicaveis e devolve o ETag do processContent."""
+    with _purview_lock:
+        cache = _purview_scope_cache.get(user_id)
+        if not forcar and cache and time.time() < cache[1]:
+            return cache[0]
+
+    resposta = requests.post(
+        PURVIEW_GRAPH_ROOT + "/users/" + user_id
+        + "/dataSecurityAndGovernance/protectionScopes/compute",
+        headers=_purview_headers(),
+        json={
+            "activities": "uploadText,downloadText",
+            "locations": [
+                {
+                    "@odata.type": "microsoft.graph.policyLocationApplication",
+                    "value": PURVIEW_CLIENT_APP_ID,
+                }
+            ],
+        },
+        timeout=30,
+    )
+    resposta.raise_for_status()
+    etag = resposta.headers.get("ETag")
+    with _purview_lock:
+        _purview_scope_cache[user_id] = (etag, time.time() + _PURVIEW_SCOPE_TTL)
+    return etag
+
+
+def _purview_bloqueia(payload):
+    for acao in payload.get("policyActions", []):
+        if (
+            acao.get("action", "").lower() == "restrictaccess"
+            and acao.get("restrictionAction", "").lower() == "block"
+        ):
+            return True
+    return False
+
+
+def _purview_process(conteudo, atividade, conversa, sequencia):
+    if not PURVIEW_USER_ID:
+        raise RuntimeError("PURVIEW_USER_ID ausente no .env.")
+
+    etag = _purview_compute_scopes(PURVIEW_USER_ID)
+    agora = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+    corpo = {
+        "contentToProcess": {
+            "contentEntries": [
+                {
+                    "@odata.type": "microsoft.graph.processConversationMetadata",
+                    "identifier": str(uuid.uuid4()),
+                    "content": {
+                        "@odata.type": "microsoft.graph.textContent",
+                        "data": conteudo,
+                    },
+                    "agents": [
+                        {
+                            "@odata.type": "microsoft.graph.aiAgentInfo",
+                            "blueprintId": BLUEPRINT_ID,
+                            "identifier": AGENT_ID,
+                            "name": AGENT_NAME,
+                            "version": PURVIEW_APP_VERSION,
+                        }
+                    ],
+                    "name": AGENT_NAME + " " + atividade,
+                    "correlationId": conversa,
+                    "sequenceNumber": sequencia,
+                    "isTruncated": False,
+                    "createdDateTime": agora,
+                    "modifiedDateTime": agora,
+                    "contentCategory": "ai",
+                }
+            ],
+            "activityMetadata": {"activity": atividade},
+            "deviceMetadata": {
+                "deviceType": "Unmanaged",
+                "operatingSystemSpecifications": {
+                    "operatingSystemPlatform": os.name,
+                    "operatingSystemVersion": os.environ.get("OS", "unknown"),
+                },
+            },
+            "protectedAppMetadata": {
+                "name": AGENT_NAME,
+                "version": PURVIEW_APP_VERSION,
+                "applicationLocation": {
+                    "@odata.type": "microsoft.graph.policyLocationApplication",
+                    "value": PURVIEW_CLIENT_APP_ID,
+                },
+            },
+            "integratedAppMetadata": {
+                "name": AGENT_NAME,
+                "version": PURVIEW_APP_VERSION,
+            },
+        }
+    }
+
+    for tentativa in range(2):
+        cabecalhos = _purview_headers()
+        if etag:
+            cabecalhos["If-None-Match"] = etag
+        resposta = requests.post(
+            PURVIEW_GRAPH_ROOT + "/users/" + PURVIEW_USER_ID
+            + "/dataSecurityAndGovernance/processContent",
+            headers=cabecalhos,
+            json=corpo,
+            timeout=30,
+        )
+        resposta.raise_for_status()
+        if resposta.status_code in (202, 204) or not resposta.content:
+            return False
+
+        resultado = resposta.json()
+        erros = resultado.get("processingErrors", [])
+        if erros:
+            raise RuntimeError("Purview retornou " + str(len(erros)) + " erro(s).")
+        if resultado.get("protectionScopeState") == "modified" and tentativa == 0:
+            etag = _purview_compute_scopes(PURVIEW_USER_ID, forcar=True)
+            continue
+        return _purview_bloqueia(resultado)
+
+    return False
+
+
+def purview_bloqueia(conteudo, atividade, conversa, sequencia):
+    """True quando a politica manda bloquear."""
+    if not PURVIEW_ENABLED:
+        return False
+    try:
+        return _purview_process(conteudo, atividade, conversa, sequencia)
+    except Exception as erro:
+        print("  [purview] falha na avaliacao (" + atividade + "):", erro)
+        if PURVIEW_FAIL_CLOSED:
+            raise
+        return False
+
+
+# ---------------------------------------------------------------------------
 # O agente
 # ---------------------------------------------------------------------------
 provedor_token_openai = get_bearer_token_provider(
@@ -290,6 +501,16 @@ detalhes_chamador = CallerDetails(
 )
 
 
+def _registrar_saida(pergunta, resposta, conversa):
+    with OutputScope(
+        request=_criar_request(pergunta, conversa),
+        response=Response(messages=resposta),
+        agent_details=detalhes_agente,
+        user_details=detalhes_chamador.user_details,
+    ):
+        pass
+
+
 @tool
 def consultar_clima(cidade: str) -> str:
     """Retorna a temperatura atual de uma cidade.
@@ -300,16 +521,6 @@ def consultar_clima(cidade: str) -> str:
     Paris, Nova York, Toquio, Seattle.
     Acentos e maiusculas sao ignorados.
     """
-    chave = _normalizar(cidade)
-    coordenadas = CIDADES.get(chave)
-    if coordenadas is None:
-        disponiveis = ", ".join(sorted(CIDADES))
-        return (
-            "Nao tenho as coordenadas de '" + cidade + "'. "
-            "Cidades disponiveis: " + disponiveis
-        )
-
-    latitude, longitude = coordenadas
     detalhes = ToolCallDetails(
         tool_name="consultar_clima",
         arguments={"cidade": cidade},
@@ -317,22 +528,35 @@ def consultar_clima(cidade: str) -> str:
         tool_type=TIPO_FERRAMENTA_FUNCAO,
         endpoint=ServiceEndpoint(hostname="api.open-meteo.com", port=443),
     )
-    with ExecuteToolScope(
-        request=Request(content=cidade),
+    escopo = ExecuteToolScope(
+        request=_criar_request(cidade),
         details=detalhes,
         agent_details=detalhes_agente,
-    ):
-        resposta = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": latitude,
-                "longitude": longitude,
-                "current": "temperature_2m",
-            },
-            timeout=15,
-        )
-        temperatura = resposta.json()["current"]["temperature_2m"]
-        return str(temperatura) + " graus Celsius em " + cidade + "."
+    )
+    with escopo:
+        chave = _normalizar(cidade)
+        coordenadas = CIDADES.get(chave)
+        if coordenadas is None:
+            disponiveis = ", ".join(sorted(CIDADES))
+            resultado = (
+                "Nao tenho as coordenadas de '" + cidade + "'. "
+                "Cidades disponiveis: " + disponiveis
+            )
+        else:
+            latitude, longitude = coordenadas
+            resposta = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude": latitude,
+                    "longitude": longitude,
+                    "current": "temperature_2m",
+                },
+                timeout=15,
+            )
+            temperatura = resposta.json()["current"]["temperature_2m"]
+            resultado = str(temperatura) + " graus Celsius em " + cidade + "."
+        escopo.record_response(resultado)
+    return resultado
 
 
 agente = create_react_agent(llm, [consultar_clima])
@@ -384,6 +608,11 @@ def abrir_banner():
     print("  Tenant   :", mascarar(TENANT_ID))
     print("  Modelo   :", os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"])
     print("  Telemetria: Microsoft Agent 365 (app-only, S2S)")
+    if PURVIEW_ENABLED:
+        modo = "fail-closed" if PURVIEW_FAIL_CLOSED else "fail-open"
+        print("  Purview   : avaliacao ativa (" + modo + ")")
+    else:
+        print("  Purview   : desativado (PURVIEW_ENABLED=false)")
     print("=" * 68)
     print(AJUDA)
 
@@ -413,6 +642,7 @@ def conversar():
 
     conversa = str(uuid.uuid4())
     historico = []
+    sequencia = 0
 
     while True:
         try:
@@ -437,12 +667,14 @@ def conversar():
         elif pergunta.lower() == "/novo":
             conversa = str(uuid.uuid4())
             historico = []
+            sequencia = 0
             print("Conversa reiniciada.")
             print()
             continue
 
+        token_conversa = _conversa_atual.set(conversa)
         escopo = InvokeAgentScope(
-            request=Request(content=pergunta, conversation_id=conversa),
+            request=_criar_request(pergunta, conversa),
             scope_details=InvokeAgentScopeDetails(),
             agent_details=detalhes_agente,
             caller_details=detalhes_chamador,
@@ -450,16 +682,37 @@ def conversar():
         try:
             with escopo:
                 escopo.record_input_messages(pergunta)
+
+                # Purview avalia o PROMPT antes de chegar ao modelo.
+                if purview_bloqueia(pergunta, "uploadText", conversa, sequencia):
+                    escopo.record_output_messages(MSG_PROMPT_BLOQUEADO)
+                    _registrar_saida(pergunta, MSG_PROMPT_BLOQUEADO, conversa)
+                    print()
+                    print("Agente >", MSG_PROMPT_BLOQUEADO)
+                    print()
+                    sequencia += 2
+                    continue
+
                 historico.append(("user", pergunta))
                 resultado = agente.invoke({"messages": historico})
                 historico = resultado["messages"]
                 resposta = historico[-1].content
+
+                # Purview avalia a RESPOSTA antes de chegar ao usuario.
+                if purview_bloqueia(resposta, "downloadText", conversa, sequencia + 1):
+                    resposta = MSG_RESPOSTA_BLOQUEADA
+                    historico = historico[:-1]
+
                 escopo.record_output_messages(resposta)
+                _registrar_saida(pergunta, resposta, conversa)
+                sequencia += 2
         except Exception as erro:
             print()
             print("Erro ao processar:", erro)
             print()
             continue
+        finally:
+            _conversa_atual.reset(token_conversa)
 
         print()
         print("Agente >", resposta)

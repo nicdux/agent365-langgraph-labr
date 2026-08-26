@@ -249,7 +249,42 @@ requer o programa Frontier. Num Standard Agent, deixe as duas em branco.
 
 ---
 
+## Telemetria elegivel para o Microsoft Defender
+
+Emitir spans nao basta. Para que a atividade apareca como **Activity** no
+Defender e no centro de administracao, o turno precisa carregar um conjunto
+especifico de atributos e operacoes:
+
+| Item | Por que e necessario |
+|---|---|
+| `microsoft.channel.name` | Exigido para o registro ser classificado como Activity |
+| `microsoft.session.id` | Agrupa os turnos de uma mesma sessao |
+| Operacao `output_messages` | A saida precisa de escopo proprio, nao so um atributo no span raiz |
+| `record_response()` na ferramenta | O resultado da ferramenta precisa ser registrado explicitamente |
+
+O `agent.py` deste repositorio ja implementa os quatro. Um helper unico
+constroi todos os `Request` com canal, sessao e conversa, e um `ContextVar`
+propaga o contexto ate as ferramentas sem estado global mutavel.
+
+Sem esses itens a exportacao retorna HTTP 200, os spans existem e a telemetria
+e aceita, mas nada aparece no Defender. E uma falha silenciosa.
+
+### Como verificar
+
+Instale as Agent 365 Skills e peca ao assistente de codigo:
+
+```
+validate this Agent 365 integration
+```
+
+O `a365-code-validator` executa um preflight sobre o projeto e aponta os
+atributos e operacoes ausentes. Foi ele que identificou os quatro itens acima
+neste laboratorio.
+
+---
+
 ## Como a autenticação funciona
+
 
 Esta é a parte que costuma travar quem tenta reproduzir, então vale entender.
 
@@ -281,6 +316,9 @@ isso o `agent.py` chama o endpoint de token diretamente.
 | Nada acontece ao rodar | Arquivo corrompido ao copiar e colar | Clone o repositório |
 | `ModuleNotFoundError` | Ambiente virtual não ativado | `.\.venv\Scripts\Activate.ps1` |
 | `Invalid type ToolType` | Enum passado onde se espera string | Já corrigido no `agent.py` |
+| Telemetria aceita mas ausente no Defender | Falta `microsoft.channel.name` ou a operação `output_messages` | Rode o `a365-code-validator` |
+| `PermissionDenied` no Azure OpenAI | Variáveis `AZURE_CLIENT_*` no `.env` fazem o `DefaultAzureCredential` adotar o app errado | Use nomes próprios, como `PURVIEW_CLIENT_SECRET` |
+| `execute_tool` duplicado | Escopo manual + auto-instrumentação do LangChain | Conhecido no SDK 1.0.0; o span manual é o elegível |
 | Aviso de depreciação do LangGraph | `create_react_agent` migrou para `langchain.agents` | Suprimido; a função é válida até a v2.0 |
 
 ---
