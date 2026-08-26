@@ -332,6 +332,23 @@ Se o agente responder normalmente, reinicie-o: o ETag do
 `protectionScopes/compute` fica em cache por uma hora, e uma sessão antiga
 continua usando o escopo de quando a política ainda não existia.
 
+### Fail-open ou fail-closed
+
+A variável `PURVIEW_FAIL_CLOSED` do `.env` decide o que acontece quando a
+chamada ao Purview **falha** — timeout, token expirado, HTTP 400.
+
+Com `false`, o agente imprime o erro no console e **responde normalmente**: o
+conteúdo segue sem avaliação de política. Com `true`, o agente recusa a
+requisição.
+
+**Em produção, use `true`.** Com fail-open, qualquer erro na API vira bypass de
+política — e a falha é discreta, uma linha no console enquanto a conversa
+continua. Uma requisição malformada ou uma indisponibilidade momentânea bastam.
+
+No teste de bloqueio, porém, `false` é o que dá valor à evidência: se o agente
+bloqueou com fail-open ativo, o bloqueio veio de decisão de política e não de
+um erro mascarado.
+
 ### Erros do `New-DlpCompliancePolicy` neste cenário
 
 | Erro | Causa | Solução |

@@ -52,24 +52,58 @@ identificadores — `SourceAgentId`, `EntraAgentID`, `EntraBlueprintID` e
 `ObservabilityID`. Num laboratório simples, todos apontam para a mesma
 identidade.
 
-Esse inventário é uma pipeline **separada** da tabela `CloudAppEvents` do
-advanced hunting. Ele funciona mesmo sem licença de Microsoft Defender for
-Cloud Apps, mas mostra apenas inventário e correlação de identidade — não
-atividade granular de invocação.
+Esse inventário é uma pipeline **separada** do advanced hunting. Ele funciona
+mesmo sem licença de Microsoft Defender for Cloud Apps, mas mostra apenas
+inventário e correlação de identidade — para atividade granular, veja a seção
+seguinte.
 
-Se você quiser a atividade granular via KQL:
+### Atividade granular via KQL
+
+Para ver as chamadas do agente ao Purview, use **`GraphAPIAuditEvents`** — e
+não a `CloudAppEvents`.
 
 ```kql
-CloudAppEvents
-| where Timestamp > ago(2h)
-| where ActionType contains "Agent"
-| take 20
+GraphAPIAuditEvents
+| where Timestamp > ago(24h)
+| where ApplicationId == "<APP-ID-DO-CLIENTE-PURVIEW>"
+| extend Operacao = case(
+    RequestUri has "processContent",   "processContent",
+    RequestUri has "protectionScopes", "protectionScopes/compute",
+    "outra")
+| summarize Chamadas = count(), OK = countif(ResponseStatusCode == 200) by Operacao
+| order by Chamadas desc
 ```
 
-Essa tabela exige licença de **Microsoft Defender for Cloud Apps**. Sem ela a
-tabela fica completamente vazia, e o portal reporta falta de permissão em vez
-de indicar o problema de licenciamento — um diagnóstico enganoso que custa
-tempo.
+O `ApplicationId` é o mesmo `PURVIEW_CLIENT_APP_ID` do seu `.env`. O resultado
+mostra quantas vezes o agente consultou as políticas aplicáveis e quantas vezes
+submeteu conteúdo para avaliação, com a contagem de respostas HTTP 200.
+
+Para inspecionar uma chamada individual:
+
+```kql
+GraphAPIAuditEvents
+| where Timestamp > ago(24h)
+| where ApplicationId == "<APP-ID-DO-CLIENTE-PURVIEW>"
+| project Timestamp, RequestMethod, ResponseStatusCode, RequestUri, IpAddress
+| order by Timestamp desc
+```
+
+O `RequestUri` traz o endpoint completo do Graph, incluindo o identificador do
+usuário em nome de quem o agente operou — o mesmo que aparece no evento de DLP
+do Purview. É assim que se correlacionam os dois registros.
+
+### Por que não usar CloudAppEvents
+
+A tabela `CloudAppEvents` exige licença de **Microsoft Defender for Cloud
+Apps**. Sem ela, a tabela existe e é consultável, mas fica permanentemente
+vazia — a consulta não dá erro, apenas retorna "No results found". Pior: o
+portal chega a reportar falta de permissão em vez de indicar o problema de
+licenciamento.
+
+Se você quiser confirmar em qual dos dois casos está, rode `CloudAppEvents |
+take 10` sem nenhum filtro. Erro de tabela desconhecida significa escopo
+errado; resultado vazio sem erro significa que a tabela existe e não está sendo
+populada.
 
 ---
 
