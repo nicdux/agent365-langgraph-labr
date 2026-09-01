@@ -144,6 +144,10 @@ Abra o `.env` e preencha as três primeiras variáveis com os dados do seu
 recurso do Azure OpenAI. As variáveis do Agent 365 serão preenchidas
 automaticamente na próxima etapa.
 
+O bloco `PURVIEW_*` no fim do arquivo é opcional — deixe como está por
+enquanto. Ele só entra em jogo se você quiser o bloqueio em tempo real, na
+seção *Purview SDK — o app cliente*.
+
 ---
 
 ## Etapa 5 — Blueprint e identidade
@@ -206,18 +210,22 @@ no `.env`.
 aparece no registro com identidade Entra e proteções do Purview aplicadas.
 Pode levar cerca de uma hora após o registro.
 
-**Microsoft Defender** → Busca avançada:
+**Microsoft Defender** → Busca avançada. Para ver as chamadas do agente ao
+Purview, use `GraphAPIAuditEvents` — trocando o AppId pelo seu
+`PURVIEW_CLIENT_APP_ID`:
 
 ```kql
-CloudAppEvents
-| where Timestamp > ago(2h)
-| where ActionType contains "Agent"
-| take 20
+GraphAPIAuditEvents
+| where Timestamp > ago(24h)
+| where ApplicationId == "<APP-ID-DO-CLIENTE-PURVIEW>"
+| project Timestamp, RequestMethod, ResponseStatusCode, RequestUri
+| order by Timestamp desc
 ```
 
-> Requer o **conector Microsoft 365** habilitado em
-> Configurações → Segurança para IA, com *Microsoft Entra ID Management
-> events* e *Microsoft 365 activities*. Sem ele a tabela fica vazia.
+> Não use `CloudAppEvents` para isso: ela exige licença de **Microsoft Defender
+> for Cloud Apps** e, sem ela, fica permanentemente vazia — a consulta não dá
+> erro, apenas retorna "No results found". O [EVIDENCIAS.md](EVIDENCIAS.md)
+> detalha como distinguir os dois casos.
 
 > Se o navegador estiver traduzindo a página, desligue a tradução para
 > `security.microsoft.com`. O Chrome traduz as palavras-chave do KQL e
@@ -278,6 +286,59 @@ validate this Agent 365 integration
 O `a365-code-validator` executa um preflight sobre o projeto e aponta os
 atributos e operacoes ausentes. Foi ele que identificou os quatro itens acima
 neste laboratorio.
+
+---
+
+## Purview SDK — o app cliente
+
+Esta seção e a próxima são **opcionais**. Elas só são necessárias se você quiser
+que o agente **bloqueie** prompts e respostas em tempo real. Sem elas o agente
+funciona por completo — identidade, telemetria, Defender e classificação no
+DSPM. O que falta é apenas a decisão em runtime.
+
+O `agent.py` chama dois endpoints do Microsoft Graph a cada turno:
+`protectionScopes/compute`, que descobre as políticas aplicáveis, e
+`processContent`, que envia o conteúdo e recebe a ação a executar. Para isso ele
+precisa de um app registrado no Entra — e **esse app não é criado pelo
+`a365 setup all`**. Você o cria à mão, uma vez.
+
+### Criar o app
+
+Em **Entra ID → App registrations → New registration**, dê um nome (por
+exemplo `A365 Lab Purview Client`) e mantenha *Single tenant*. Não é preciso
+redirect URI.
+
+Em **API permissions → Add a permission → Microsoft Graph → Application
+permissions** (não *Delegated*), adicione:
+
+| Permissão | Para quê |
+|---|---|
+| `Content.Process.All` | Enviar conteúdo ao `processContent` |
+| `ProtectionScopes.Compute.All` | Descobrir as políticas aplicáveis |
+
+Depois clique em **Grant admin consent**. As duas precisam ficar com o sinal
+verde — sem consent, a chamada falha em runtime.
+
+Em **Certificates & secrets → New client secret**, copie o valor na hora: ele
+não é exibido de novo.
+
+### Preencher o `.env`
+
+```
+PURVIEW_ENABLED=true
+PURVIEW_CLIENT_APP_ID=<Application (client) ID do app que você acabou de criar>
+PURVIEW_CLIENT_SECRET=<o segredo>
+PURVIEW_USER_ID=<object id do usuário que interage com o agente>
+PURVIEW_FAIL_CLOSED=false
+```
+
+O segredo precisa ficar em `PURVIEW_CLIENT_SECRET`. Se você usar o nome
+`AZURE_CLIENT_SECRET`, o `DefaultAzureCredential` adota este app para **tudo**,
+inclusive o Azure OpenAI, e o modelo passa a responder `401 PermissionDenied`
+sem nenhuma pista da causa real.
+
+Com o app pronto, siga para a política de DLP abaixo — é ela que dá ao Purview
+algo a decidir.
 
 ---
 
