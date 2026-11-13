@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#3155d9">
+    <meta name="description" content="Conheça conteúdos profissionais autorizados sobre Eduardo Campos de Oliveira com um assistente de IA transparente.">
+    <title>Pergunte ao Eduardo | Agent 365</title>
+    <link rel="icon" href="/static/assets/mark.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/" aria-label="Agent 365, início">
+          <img src="/static/assets/mark.svg" width="38" height="38" alt="">
+          <span><strong>agent<span class="brand-number">365</span></strong><small>LABORATÓRIO DE IA</small></span>
+        </a>
+        <div class="environment-badge"><span class="status-dot"></span> Experiências com propósito</div>
+      </div>
+    </header>
+
+    <div class="page-shell">
+      <nav class="tabs" role="tablist" aria-label="Áreas do laboratório">
+        <button id="tab-lab" class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-lab" tabindex="-1">
+          <span class="tab-number" aria-hidden="true">01</span> O laboratório
+        </button>
+        <button id="tab-eduardo" class="tab" type="button" role="tab" aria-selected="true" aria-controls="panel-eduardo" tabindex="0">
+          <span class="tab-number" aria-hidden="true">02</span> Pergunte ao Eduardo
+          <span class="new-badge" aria-hidden="true">NOVO</span>
+        </button>
+      </nav>
+
+      <main id="main-content" tabindex="-1">
+        <section id="panel-eduardo" role="tabpanel" aria-labelledby="tab-eduardo" tabindex="0">
+          <div class="workspace">
+            <aside class="profile-column" aria-label="Sobre esta experiência">
+              <section class="profile-card">
+                <div class="profile-cover"><span class="cover-orbit orbit-one"></span><span class="cover-orbit orbit-two"></span></div>
+                <div class="profile-content">
+                  <div data-avatar="profile"></div>
+                  <span class="eyebrow">ASSISTENTE DE PERFIL</span>
+                  <h2 class="profile-name" id="profile-name">Eduardo Campos<br>de Oliveira<span class="name-dot">.</span></h2>
+                  <p class="profile-description">Uma nova maneira de explorar seu conteúdo profissional autorizado.</p>
+                  <span class="identity-badge"><span class="mini-sparkle" aria-hidden="true">✦</span> Assistente de IA, não o Eduardo</span>
+                  <a id="profile-link" class="profile-link" href="https://www.linkedin.com/in/educam/" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">
+                    <span class="linkedin-mark" aria-hidden="true">in</span> Perfil de referência
+                    <span aria-hidden="true">↗</span><span class="sr-only"> (abre em nova aba)</span>
+                  </a>
+                </div>
+              </section>
+
+              <section class="trust-card" aria-labelledby="trust-title">
+                <span class="trust-symbol" aria-hidden="true">◇</span>
+                <h3 id="trust-title">Conversa aberta.<br>Limites claros.</h3>
+                <ul>
+                  <li><span aria-hidden="true">✓</span> Apenas informações autorizadas</li>
+                  <li><span aria-hidden="true">✓</span> Fontes junto de cada resposta</li>
+                  <li><span aria-hidden="true">✓</span> Sem opiniões ou fatos inventados</li>
+                </ul>
+                <p>Este assistente não fala em nome de Eduardo e não acessa o LinkedIn.</p>
+              </section>
+              <p class="sidebar-note">Tecnologia para aproximar.<br>Transparência para confiar.</p>
+            </aside>
+
+            <div class="conversation-column">
+              <div class="page-intro">
+                <span class="eyebrow">CONVERSAS PROFISSIONAIS</span>
+                <h1>Pergunte ao Eduardo<span class="title-sparkle" aria-hidden="true">✦</span></h1>
+                <p>Trajetória, experiências e ideias de liderança.<br class="desktop-break"> Conheça o que estiver disponível nas fontes autorizadas.</p>
+              </div>
+
+              <div id="knowledge-notice" class="knowledge-notice" role="status" hidden>
+                <span class="notice-icon" aria-hidden="true">i</span>
+                <p><strong>Conteúdo em preparação.</strong> Ainda não há informações biográficas autorizadas na base. Você pode testar o chat; o assistente avisará quando não encontrar uma informação.</p>
+              </div>
+
+              <section class="chat-card" aria-label="Conversa com o assistente de IA">
+                <header class="chat-header">
+                  <div class="assistant-identity">
+                    <div data-avatar="small"></div>
+                    <div><h2>Assistente do Eduardo</h2><p id="connection-status"><span class="status-dot"></span> Conectando com segurança</p></div>
+                  </div>
+                  <button id="clear-conversation" class="button-quiet" type="button" aria-label="Limpar conversa e começar novamente">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 11a9 9 0 1 1 2.6 6.4M3 4v7h7"/></svg>
+                    <span>Nova conversa</span>
+                  </button>
+                </header>
+
+                <div class="chat-body">
+                  <div id="empty-state" class="empty-state">
+                    <div class="welcome-avatar" data-avatar="welcome"></div>
+                    <span class="welcome-label">CONHECER COMEÇA COM UMA PERGUNTA</span>
+                    <h2>Por onde vamos começar?</h2>
+                    <p>Escolha uma sugestão ou escreva a sua pergunta.<br>As respostas vêm do conteúdo profissional aprovado.</p>
+                    <div id="suggestions" class="suggestions" aria-label="Perguntas sugeridas"></div>
+                  </div>
+                  <div id="messages" class="messages" role="log" aria-label="Histórico da conversa" aria-live="polite" aria-relevant="additions" tabindex="0" hidden></div>
+                </div>
+
+                <div id="error-banner" class="error-banner" role="alert" hidden>
+                  <p id="error-message"></p>
+                  <button id="reconnect" type="button" class="error-action" hidden>Reconectar</button>
+                </div>
+                <div id="composer" class="composer-container"></div>
+                <div class="chat-disclaimer">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="3"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+                  Histórico apenas nesta aba. Não compartilhe dados pessoais ou confidenciais.
+                </div>
+              </section>
+              <p class="experience-note"><span aria-hidden="true">✦</span> Uma experiência de IA com fontes, contexto e responsabilidade.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-lab" class="lab-panel" role="tabpanel" aria-labelledby="tab-lab" tabindex="0" hidden>
+          <span class="eyebrow">MICROSOFT AGENT 365 + LANGGRAPH</span>
+          <h1>Um laboratório.<br>Novas possibilidades<span class="name-dot">.</span></h1>
+          <p class="lab-lead">O agente de terminal continua como antes. A interface web adiciona uma experiência independente para conversar com conteúdo profissional autorizado.</p>
+          <div class="lab-grid">
+            <article class="lab-card"><span class="lab-card-number">01 / TERMINAL</span><h2>O agente original</h2><p>Consultas de clima com LangGraph, Azure OpenAI e a telemetria de laboratório do Microsoft Agent 365.</p><code>python agent.py</code></article>
+            <article class="lab-card"><span class="lab-card-number">02 / CONVERSA</span><h2>Pergunte ao Eduardo</h2><p>Um assistente de IA com avatar ilustrado, perguntas sugeridas e respostas limitadas a fontes aprovadas.</p><button id="open-eduardo" class="button-primary" type="button">Começar uma conversa <span aria-hidden="true">↗</span></button></article>
+            <article class="lab-card"><span class="lab-card-number">03 / CONFIANÇA</span><h2>Conteúdo sob controle</h2><p>A base é preenchida manualmente. Sem scraping, sem biografia inventada e sem credenciais do Azure no navegador.</p><span class="lab-label">Privacidade por padrão</span></article>
+          </div>
+        </section>
+      </main>
+      <footer class="site-footer"><span>agent365 <span class="footer-divider">/</span> Laboratório de experiências com IA</span><span>Informação com origem. Conversa com clareza.</span></footer>
+    </div>
+    <div id="announcer" class="sr-only" role="status" aria-live="polite"></div>
+    <noscript><p class="noscript-message">Ative o JavaScript para usar o chat interativo. Nenhuma chamada ao Azure é feita diretamente pelo navegador.</p></noscript>
+  </body>
+</html>

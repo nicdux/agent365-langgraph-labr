@@ -27,6 +27,174 @@ Você digita no terminal
 Cada mensagem gera um turno de telemetria com três spans: `invoke_agent`
 (a invocação), `chat` (a chamada ao modelo) e `execute_tool` (a ferramenta).
 
+## Interface web — Pergunte ao Eduardo
+
+Além do agente original de terminal, o projeto inclui uma interface web com
+as abas **O laboratório** e **Pergunte ao Eduardo**. A segunda apresenta um
+assistente de IA sobre o conteúdo profissional autorizado de Eduardo Campos
+de Oliveira. **Não é o próprio Eduardo e não fala em nome dele.**
+
+O avatar é uma ilustração criada a partir da foto fornecida para esta
+experiência. A foto original não é incluída no repositório. Se a ilustração
+não carregar, a interface exibe as iniciais **EC**.
+
+Como o projeto não tinha frontend, a interface usa HTML, CSS e módulos
+JavaScript nativos, sem compilação ou serviços externos de fontes e imagens.
+O backend FastAPI é independente de `agent.py`: não importa nem inicializa o
+agente de terminal, seus exportadores de telemetria ou o fluxo de DLP.
+**As evidências do Agent 365/Purview descritas neste laboratório continuam
+pertencendo ao agente de terminal, não ao chat web.**
+
+### Executar localmente
+
+Com Python 3.12 ou superior e o ambiente virtual ativado:
+
+```powershell
+python -m pip install -r requirements.txt
+Copy-Item .env.template .env  # somente se voce ainda nao tem um .env
+python -m uvicorn backend.app:app --host 127.0.0.1 --port 8000 --no-proxy-headers --no-access-log
+```
+
+Abra `http://127.0.0.1:8000`. Não sobrescreva um `.env` já configurado.
+O chat web reutiliza `AZURE_OPENAI_ENDPOINT`,
+`AZURE_OPENAI_DEPLOYMENT_NAME` e `AZURE_OPENAI_API_VERSION` do deployment
+existente; não cria nem publica outro modelo. O deployment precisa suportar
+Chat Completions com **structured outputs / JSON Schema**. Não altere o
+deployment apenas para iniciar a interface.
+
+No modo local, `AZURE_OPENAI_AUTH_MODE=auto` usa `DefaultAzureCredential`,
+como o agente original. Use `az login --tenant SEU-TENANT-ID` e atribua
+**Cognitive Services OpenAI User** à identidade utilizada. Não é necessário
+configurar o Agent 365 para abrir a interface web.
+
+### Inserir conteúdo profissional autorizado
+
+**Não existe scraping nem importação automática do LinkedIn.** O endereço
+informado é somente um link de referência. Nem o servidor nem o modelo
+visitam essa página.
+
+A base [knowledge/eduardo.json](knowledge/eduardo.json) começa com `entries`
+vazio: nenhum cargo, competência, projeto, opinião ou trajetória foi
+deduzido da foto ou do link. A interface funciona nesse estado e responde:
+
+> Não encontrei essa informação no conteúdo profissional disponibilizado sobre o Eduardo.
+
+Para publicar conteúdo, edite manualmente o JSON, mantendo `schema_version`
+e `profile`, e adicione registros em `entries` neste formato:
+
+```json
+{
+  "id": "trajetoria-profissional",
+  "title": "Trajetória profissional",
+  "content": "SUBSTITUA por um trecho profissional revisado e autorizado, preferencialmente em terceira pessoa.",
+  "source_label": "Identificação do documento ou material autorizado",
+  "source_url": null,
+  "approved": false
+}
+```
+
+Substitua o texto de exemplo por informação real, verificada e autorizada,
+identifique a origem e só então altere `approved` para `true`. A aprovação
+é uma declaração manual do responsável, não uma verificação automática.
+`source_url` é opcional; quando preenchido, deve usar HTTPS. IDs devem ser
+únicos. Registros sem aprovação explícita não são enviados ao modelo nem
+utilizados nas respostas. Reinicie o backend após editar a base.
+
+O modelo **seleciona até três IDs de trechos aprovados**, em vez de escrever
+livremente uma biografia. O servidor valida os IDs e monta a resposta com o
+texto exato desses trechos e suas fontes. Isso impede que texto inventado
+pelo modelo seja apresentado como fato sobre Eduardo. A relevância da
+seleção ainda depende do modelo: revise os trechos e teste as perguntas
+esperadas. Para informações ausentes, a seleção deve ser vazia e a resposta
+é a frase acima. Uma base vazia nem sequer chama o Azure.
+
+O histórico ajuda apenas a interpretar perguntas de continuação; ele não é
+considerado fonte factual. O modelo não tem ferramentas de navegação,
+busca na web ou acesso a arquivos. Conteúdo inválido do modelo gera erro
+explícito, nunca uma resposta aparentemente fundamentada.
+
+### Segurança, privacidade e limites
+
+- O navegador chama apenas `/api/session` e `/api/chat`, na mesma origem.
+  Endpoint, deployment, chaves e tokens do Azure permanecem no servidor.
+- O modo padrão `EDUARDO_AUTH_MODE=local` aceita somente clientes de loopback
+  e hosts `localhost`/`127.0.0.1`. **Não use túnel, proxy ou bind público
+  nesse modo.** O comando acima desabilita confiança em headers de proxy.
+- A API valida origem e token CSRF com cookie HttpOnly/SameSite Strict.
+  Não habilita CORS. Há CSP sem scripts inline, proteção contra frames,
+  validação de host e respostas da API sem cache.
+- Não são registrados prompts, respostas, identidades ou conteúdo da base.
+  Logs de erro contêm apenas categoria/código. Não habilite debug de
+  bibliotecas HTTP/OpenAI em ambientes com dados reais.
+- O chat web não envia conteúdo aos exportadores do Agent 365. Perguntas,
+  histórico limitado e trechos aprovados são processados pelo Azure OpenAI;
+  confira também a política de tratamento de dados do seu recurso Azure.
+- O histórico fica em `sessionStorage` **apenas nesta aba do navegador**,
+  limitado a 20 pares de pergunta/resposta, inclusive após atualizar a
+  página. **Nova conversa** cancela a espera e remove o histórico salvo.
+  Nada é persistido pelo servidor.
+- Os componentes usam texto, não HTML retornado pelo modelo. Há labels,
+  navegação de abas por setas/Home/End, envio por Enter, nova linha com
+  Shift+Enter, anúncios acessíveis de carregamento/erro e redução de movimento.
+
+| Limite | Valor |
+|---|---|
+| Pergunta | 2.000 caracteres |
+| Histórico enviado ao modelo | Até 10 mensagens, em pares, e 12.000 caracteres |
+| Corpo HTTP | 64 KiB |
+| Base manual | 128 KiB, até 50 trechos de 1.800 caracteres |
+| Resposta | Até 3 trechos autorizados, com fontes |
+| Timeout | 30 s; configurável entre 1 e 60 s |
+| Frequência | 20 perguntas/minuto por usuário (ou loopback local) |
+| Concorrência | Até 4 chamadas ao modelo por processo |
+
+O limitador é em memória e por processo. Antes de escalar para várias
+instâncias/workers, adicione limitação compartilhada no gateway e mantenha
+limites de custo e quotas no Azure OpenAI.
+
+### Hospedagem no Azure
+
+A aplicação não foi provisionada ou implantada automaticamente. Para
+hospedá-la em **Azure App Service**:
+
+1. Habilite HTTPS e **Authentication / Microsoft Entra ID (Easy Auth)**,
+   exija autenticação em todas as rotas e restrinja o tenant e os usuários
+   autorizados. Bloqueie acesso direto ao processo que contorne o Easy Auth.
+2. Configure `EDUARDO_AUTH_MODE=appservice` e
+   `EDUARDO_ALLOWED_HOSTS=SEU-APP.azurewebsites.net` (hosts exatos, separados
+   por vírgula quando houver domínio próprio). A aplicação verifica o
+   ambiente do App Service e exige os headers de identidade inseridos pelo
+   Easy Auth; não use esse modo atrás de um proxy genérico.
+3. Use `AZURE_OPENAI_AUTH_MODE=auto` ou `managed_identity`, habilite a
+   identidade gerenciada do App Service e conceda a ela o papel
+   **Cognitive Services OpenAI User** no recurso. Para identidade atribuída
+   pelo usuário, configure `AZURE_MANAGED_IDENTITY_CLIENT_ID`.
+4. Configure as três variáveis existentes do Azure OpenAI nas application
+   settings. Não coloque configurações do servidor em arquivos do frontend.
+5. Se o uso de chave for indispensável, configure
+   `AZURE_OPENAI_AUTH_MODE=api_key` e `AZURE_OPENAI_API_KEY` **por referência
+   ao Azure Key Vault nas application settings**, com acesso da identidade
+   gerenciada ao segredo. Nunca inclua a chave no código ou no Git.
+
+O modo App Service usa cookie Secure com prefixo `__Host-`, valida origem
+HTTPS e exige identidade Entra (`aad`). O modo local recusa iniciar quando
+detecta que está hospedado no App Service. A confiança nos headers
+`X-MS-CLIENT-PRINCIPAL-*` só é válida na fronteira protegida do Easy Auth.
+
+### Validar sem credenciais ou dados reais
+
+```powershell
+python -m unittest discover -s tests -p test_eduardo.py -v
+node --check .\frontend\components.js
+node --check .\frontend\app.js
+```
+
+Os testes usam apenas conteúdo sintético e chamadas Azure simuladas. Eles
+cobrem aprovação, seleção e fontes, ausência de informação, limites,
+timeouts, erros sanitizados, CSRF, origem, autenticação e arquivos estáticos.
+Uma chamada real depende da configuração e autorização do deployment
+existente; os testes não afirmam validar esse recurso.
+
 ---
 
 ## Pré-requisitos
@@ -513,3 +681,7 @@ az group delete --name rg-a365-lab
 | `.gitignore` | Protege segredos |
 | `Create-DlpPolicyForAgent365Lab.ps1` | Cria a política de DLP do Purview escopada ao agente |
 | `EVIDENCIAS.md` | Onde verificar cada evidência no seu tenant |
+| `backend/` | API web, autenticação, validação, base autorizada e cliente Azure OpenAI |
+| `frontend/` | Abas, avatar ilustrado, componentes acessíveis e chat responsivo |
+| `knowledge/eduardo.json` | Base manual; começa sem dados biográficos |
+| `tests/test_eduardo.py` | Testes isolados da experiência Pergunte ao Eduardo |

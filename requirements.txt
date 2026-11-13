@@ -12,3 +12,10 @@ azure-identity
 microsoft-agents-a365-runtime
 microsoft-agents-a365-observability-core
 microsoft-agents-a365-observability-extensions-langchain
+
+# Interface web (independente da telemetria do agente de terminal)
+fastapi
+uvicorn
+openai
+pydantic>=2
+httpx
