@@ -1,0 +1,19 @@
+{
+  "name": "agent365-eduardo-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:web": "node build-web.mjs",
+    "test:web": "node --test tests/frontend.test.mjs",
+    "test:browser": "npm run build:web && playwright test"
+  },
+  "dependencies": {
+    "dompurify": "^3.3.0",
+    "highlight.js": "^11.11.1",
+    "marked": "^17.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.0",
+    "esbuild": "^0.27.0"
+  }
+}

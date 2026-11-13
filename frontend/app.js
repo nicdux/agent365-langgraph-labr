@@ -2,14 +2,16 @@ import {
   createAvatar, createComposer, createLoading, createMessage,
   createSuggestions, element, safeHttpsUrl,
 } from "./components.js";
+import { buildModelHistory, validMessage, validReply } from "./conversation.js";
 
 const STORAGE_KEY = "eduardo-professional-chat-v1";
 const QUESTIONS = [
-  "Qual é a trajetória profissional do Eduardo?",
-  "Quais são as principais áreas de experiência dele?",
-  "Em quais temas de tecnologia e liderança ele atua?",
-  "Quais experiências profissionais estão disponíveis no perfil?",
-  "Como a experiência dele se relaciona com transformação digital?",
+  "Como funciona o Microsoft Entra Conditional Access?",
+  "Qual a diferença entre Microsoft Sentinel e Splunk?",
+  "Como integrar AWS com Microsoft Entra ID?",
+  "Como utilizar Azure OpenAI com RAG?",
+  "Como funciona o Microsoft Agent 365?",
+  "Como integrar LangGraph com Azure OpenAI?",
 ];
 const messages = document.getElementById("messages");
 const emptyState = document.getElementById("empty-state");
@@ -48,17 +50,6 @@ function storeHistory() {
   }
 }
 
-function validMessage(message, index) {
-  const expectedRole = index % 2 === 0 ? "user" : "assistant";
-  return message && message.role === expectedRole
-    && typeof message.content === "string" && Array.from(message.content).length <= 6000
-    && typeof message.time === "string" && Number.isFinite(Date.parse(message.time))
-    && Array.isArray(message.sources) && message.sources.length <= 3
-    && message.sources.every((source) => source && typeof source.id === "string"
-      && typeof source.title === "string" && typeof source.label === "string"
-      && (source.url === null || typeof source.url === "string"));
-}
-
 function restoreHistory() {
   try {
     const stored = sessionStorage.getItem(STORAGE_KEY);
@@ -91,10 +82,7 @@ function scrollMessages() {
 }
 
 function modelHistory() {
-  const selected = history.slice(-session.limits.history_messages);
-  while (selected.reduce((sum, item) => sum + Array.from(item.content).length, 0)
-    > session.limits.history_chars) selected.splice(0, 2);
-  return selected.map(({ role, content }) => ({ role, content }));
+  return buildModelHistory(history, session.limits);
 }
 
 class ApiError extends Error {
@@ -135,7 +123,8 @@ async function bootstrap() {
   try {
     const data = await requestJson("/api/session", { signal: AbortSignal.timeout(10000) });
     if (typeof data.csrf_token !== "string" || !data.profile
-      || typeof data.profile.name !== "string" || !data.limits
+      || typeof data.profile.name !== "string" || data.scope !== "microsoft"
+      || typeof data.model_configured !== "boolean" || !data.limits
       || data.limits.message_chars !== 2000 || data.limits.history_messages !== 10
       || data.limits.history_chars !== 12000 || data.limits.session_messages !== 40) {
       throw new ApiError("A configuração do assistente não pôde ser validada.");
@@ -144,9 +133,9 @@ async function bootstrap() {
     document.getElementById("profile-name").textContent = data.profile.name;
     const reference = safeHttpsUrl(data.profile.reference_url);
     if (reference) document.getElementById("profile-link").href = reference;
-    document.getElementById("knowledge-notice").hidden = data.approved_entries > 0;
+    document.getElementById("knowledge-notice").hidden = data.model_configured;
     status.replaceChildren(element("span", "status-dot"), document.createTextNode(
-      data.approved_entries ? "Pronto · fontes autorizadas" : "Pronto · conteúdo em preparação",
+      data.model_configured ? "Pronto · Microsoft Technologies" : "Azure OpenAI não configurado",
     ));
     composer.setState("ready");
     suggestionButtons.forEach((button) => { button.disabled = false; });
@@ -182,12 +171,7 @@ async function sendQuestion(question) {
       signal: AbortSignal.any([controller.signal, AbortSignal.timeout(65000)]),
     });
     if (currentSequence !== sequence) return;
-    if (typeof data.answer !== "string" || !data.answer || Array.from(data.answer).length > 6000
-      || !Array.isArray(data.sources) || data.sources.length > 3
-      || !validMessage({
-        role: "assistant", content: data.answer, sources: data.sources,
-        time: new Date().toISOString(),
-      }, 1)) {
+    if (!validReply(data)) {
       throw new ApiError("Não foi possível validar a resposta recebida.");
     }
     const answer = {

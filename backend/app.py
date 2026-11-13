@@ -23,11 +23,11 @@ from backend.assistant import (
     MAX_MESSAGE_CHARS,
     MAX_SESSION_MESSAGES,
     AssistantError,
-    AzureSelector,
+    AzureMicrosoftModel,
     ChatRequest,
     ChatResponse,
     EduardoAssistant,
-    Selector,
+    MicrosoftModel,
 )
 from backend.config import ROOT, Settings
 from backend.knowledge import KnowledgeBase, load_knowledge
@@ -98,15 +98,21 @@ def create_app(
     settings: Settings | None = None,
     *,
     knowledge: KnowledgeBase | None = None,
-    selector: Selector | None = None,
+    model: MicrosoftModel | None = None,
 ) -> FastAPI:
+    application_logger = logging.getLogger("backend")
+    if not application_logger.hasHandlers():
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        application_logger.addHandler(handler)
+        application_logger.setLevel(logging.INFO)
     if settings is None:
         load_dotenv(ROOT / ".env")
         settings = Settings.from_environment()
     settings.validate_hosting()
     knowledge = knowledge if knowledge is not None else load_knowledge(settings.knowledge_path)
-    selector = selector if selector is not None else AzureSelector(settings)
-    assistant = EduardoAssistant(knowledge, selector, settings.timeout_seconds)
+    model = model if model is not None else AzureMicrosoftModel(settings)
+    assistant = EduardoAssistant(model, settings.timeout_seconds)
     limiter = RateLimiter()
     semaphore = asyncio.Semaphore(4)
     cookie_name = "__Host-eduardo-csrf" if settings.auth_mode == "appservice" else "eduardo-csrf"
@@ -116,7 +122,7 @@ def create_app(
         try:
             yield
         finally:
-            await selector.close()
+            await model.close()
 
     app = FastAPI(
         title="Pergunte ao Eduardo",
@@ -157,6 +163,11 @@ def create_app(
                 "csrf_token": token,
                 "profile": knowledge.profile.model_dump(mode="json"),
                 "approved_entries": len(knowledge.approved_entries),
+                "scope": "microsoft",
+                "model_configured": bool(
+                    settings.azure_endpoint and settings.azure_deployment
+                    and (settings.credential_mode != "api_key" or settings.azure_api_key)
+                ),
                 "limits": {
                     "message_chars": MAX_MESSAGE_CHARS,
                     "history_messages": MAX_HISTORY_MESSAGES,
@@ -226,7 +237,10 @@ def create_app(
                 result = await assistant.answer(payload)
         except AssistantError as error:
             LOGGER.warning("chat_failure code=%s", error.code)
-            return error_response(error.code, error.message, error.status)
+            response = error_response(error.code, error.message, error.status)
+            if error.status == 429:
+                response.headers["Retry-After"] = str(RATE_WINDOW_SECONDS)
+            return response
         return JSONResponse(result.model_dump())
 
     @app.get("/")

@@ -12,6 +12,7 @@ export function icon(name) {
     arrow: "M7 17 17 7M7 7h10v10",
     send: "M12 19V5m-6 6 6-6 6 6",
     user: "M20 21v-2a7 7 0 0 0-14 0v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8",
+    copy: "M9 9h11v12H9zM5 15H3V3h12v2",
   };
   const svg = document.createElementNS(SVG_NS, "svg");
   for (const [key, value] of Object.entries({
@@ -51,16 +52,6 @@ export function createSuggestions(questions, onSelect) {
   });
 }
 
-export function safeHttpsUrl(value) {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && !url.username && !url.password ? url.href : null;
-  } catch (error) {
-    if (error instanceof TypeError) return null;
-    throw error;
-  }
-}
-
 export function createMessage(message) {
   const user = message.role === "user";
   const article = element("article", `message message-${message.role}`);
@@ -83,10 +74,12 @@ export function createMessage(message) {
   }).format(new Date(message.time)));
   time.dateTime = message.time;
   meta.append(time);
-  content.append(meta, element("p", "message-text", message.content));
+  content.append(meta, user
+    ? element("p", "message-text", message.content)
+    : renderMarkdown(message.content, message.sources));
   if (!user && message.sources.length) {
     const details = element("details", "sources");
-    details.append(element("summary", "", `${message.sources.length} fonte(s) autorizada(s)`));
+    details.append(element("summary", "", `${message.sources.length} referência(s) Microsoft Learn`));
     const list = element("ul");
     for (const source of message.sources) {
       const item = element("li");
@@ -107,8 +100,25 @@ export function createMessage(message) {
     }
     details.append(list);
     content.append(details);
-  } else if (!user) {
-    content.append(element("span", "source-missing", "Informação não disponível nas fontes autorizadas"));
+  }
+  if (!user) {
+    const actions = element("div", "message-actions");
+    const copy = element("button", "copy-button");
+    copy.type = "button";
+    copy.setAttribute("aria-label", "Copiar resposta");
+    copy.append(icon("copy"), element("span", "", "Copiar"));
+    const feedback = element("span", "copy-feedback");
+    feedback.setAttribute("role", "status");
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(message.content);
+        feedback.textContent = "Resposta copiada.";
+      } catch {
+        feedback.textContent = "Não foi possível copiar. Selecione o texto da resposta.";
+      }
+    });
+    actions.append(copy, feedback);
+    content.append(actions);
   }
   article.append(content);
   return article;
@@ -123,14 +133,14 @@ export function createLoading() {
   const dots = element("span", "loading-dots");
   dots.setAttribute("aria-hidden", "true");
   dots.append(element("span"), element("span"), element("span"));
-  content.append(dots, element("span", "loading-label", "Consultando o conteúdo autorizado…"));
+  content.append(dots, element("span", "loading-label", "Analisando a pergunta e validando a resposta…"));
   wrapper.append(avatar, content);
   return wrapper;
 }
 
 export function createComposer(onSubmit) {
   const form = element("form", "composer-form");
-  const label = element("label", "sr-only", "Sua pergunta sobre o conteúdo profissional do Eduardo");
+  const label = element("label", "sr-only", "Sua pergunta sobre tecnologias Microsoft");
   label.htmlFor = "question";
   const input = element("textarea");
   input.id = "question";
@@ -138,7 +148,7 @@ export function createComposer(onSubmit) {
   input.rows = 2;
   input.maxLength = 2000;
   input.required = true;
-  input.placeholder = "O que você gostaria de saber sobre o Eduardo?";
+  input.placeholder = "Pergunte sobre tecnologias Microsoft…";
   input.setAttribute("aria-describedby", "composer-help character-count");
   const bottom = element("div", "composer-bottom");
   const help = element("p", "composer-help", "Enter para enviar · Shift + Enter para nova linha");
@@ -184,3 +194,7 @@ export function createComposer(onSubmit) {
     focus() { input.focus(); },
   };
 }
+import { renderMarkdown } from "./markdown.js";
+import { safeHttpsUrl } from "./conversation.js";
+
+export { safeHttpsUrl };
