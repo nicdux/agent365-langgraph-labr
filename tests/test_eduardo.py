@@ -45,7 +45,8 @@ class FakeModel:
     def __init__(
         self, *, topic: TopicDecision | None = None, draft: DraftAnswer | None = None,
         verdict: ResponseVerdict | None = None, error: Exception | None = None,
-        delay: float = 0,
+        delay: float = 0, revision: DraftAnswer | None = None,
+        revision_verdict: ResponseVerdict | None = None,
     ) -> None:
         self.topic = topic or TopicDecision(decision="allow", clarification="")
         self.draft = draft or DraftAnswer(
@@ -56,6 +57,8 @@ class FakeModel:
             within_scope=True, follows_instructions=True, appropriately_cautious=True
         )
         self.error = error
+        self.revision = revision
+        self.revision_verdict = revision_verdict
         self.delay = delay
         self.calls: list[str] = []
         self.requests: list[ChatRequest] = []
@@ -76,7 +79,13 @@ class FakeModel:
 
     async def validate(self, request: ChatRequest, draft: DraftAnswer) -> ResponseVerdict:
         self.calls.append("validate")
+        if "revise" in self.calls and self.revision_verdict is not None:
+            return self.revision_verdict
         return self.verdict
+
+    async def revise(self, request: ChatRequest, draft: DraftAnswer) -> DraftAnswer:
+        self.calls.append("revise")
+        return self.revision or self.draft
 
     async def close(self) -> None:
         self.closed = True
@@ -252,6 +261,39 @@ class GuardrailTests(unittest.IsolatedAsyncioTestCase):
             result = await EduardoAssistant(model, 1).answer(ChatRequest(message="Explique o Azure."))
             self.assertEqual(result.answer, DOMAIN_REFUSAL)
             self.assertNotIn("Texto que", result.answer)
+            self.assertNotIn("revise", model.calls)
+
+    async def test_factual_caution_triggers_one_checked_revision(self) -> None:
+        corrected = DraftAnswer(
+            answer="O Microsoft Agent 365 apoia gestão, governança, segurança e valor de agentes de IA.",
+            source_ids=["agent365"],
+        )
+        model = FakeModel(
+            verdict=ResponseVerdict(
+                within_scope=True, follows_instructions=True, appropriately_cautious=False
+            ),
+            revision=corrected,
+            revision_verdict=ResponseVerdict(
+                within_scope=True, follows_instructions=True, appropriately_cautious=True
+            ),
+        )
+        result = await EduardoAssistant(model, 1).answer(ChatRequest(message="Agent 365"))
+        self.assertEqual(result.answer, corrected.answer)
+        self.assertEqual(model.calls, ["classify", "generate", "validate", "revise", "validate"])
+        self.assertEqual(result.sources[0].id, "agent365")
+
+    async def test_revision_cannot_bypass_output_domain_validation(self) -> None:
+        model = FakeModel(
+            verdict=ResponseVerdict(
+                within_scope=True, follows_instructions=True, appropriately_cautious=False
+            ),
+            revision_verdict=ResponseVerdict(
+                within_scope=False, follows_instructions=True, appropriately_cautious=True
+            ),
+        )
+        result = await EduardoAssistant(model, 1).answer(ChatRequest(message="Agent 365"))
+        self.assertEqual(result.answer, DOMAIN_REFUSAL)
+        self.assertEqual(model.calls.count("revise"), 1)
 
     async def test_unreliable_output_or_invented_link_is_not_released(self) -> None:
         models = [
@@ -267,6 +309,7 @@ class GuardrailTests(unittest.IsolatedAsyncioTestCase):
             result = await EduardoAssistant(model, 1).answer(ChatRequest(message="Licenciamento Entra?"))
             self.assertEqual(result.answer, UNCERTAIN_RESPONSE)
             self.assertEqual(result.sources, [])
+            self.assertEqual(model.calls.count("revise"), 1)
 
     async def test_native_content_filter_is_respected(self) -> None:
         request = Request("POST", "https://example.com")
@@ -279,6 +322,17 @@ class GuardrailTests(unittest.IsolatedAsyncioTestCase):
             result = await EduardoAssistant(model, 1).answer(ChatRequest(message="Microsoft request"))
             self.assertEqual(result.answer, SAFETY_RESPONSE)
             self.assertEqual(model.calls, ["classify"])
+
+    async def test_native_filter_during_revision_is_not_retried(self) -> None:
+        model = FakeModel(verdict=ResponseVerdict(
+            within_scope=True, follows_instructions=True, appropriately_cautious=False
+        ))
+        revise = AsyncMock(side_effect=ContentFiltered())
+        with patch.object(model, "revise", revise):
+            result = await EduardoAssistant(model, 1).answer(ChatRequest(message="Agent 365"))
+        self.assertEqual(result.answer, SAFETY_RESPONSE)
+        revise.assert_awaited_once()
+        self.assertEqual(model.calls.count("generate"), 1)
 
     async def test_timeout_and_upstream_quota_are_errors_not_domain_refusals(self) -> None:
         with self.assertLogs("backend", level="WARNING"):
@@ -309,13 +363,22 @@ class SchemaTests(unittest.TestCase):
     def test_unknown_reference_and_unbounded_answers_are_invalid(self) -> None:
         for data in (
             {"answer": "Azure", "source_ids": ["invented"]},
-            {"answer": "Azure", "source_ids": ["entra", "entra"]},
-            {"answer": "Azure", "source_ids": ["entra", "sentinel", "graph", "openai"]},
+            {"answer": "Azure", "source_ids": ["entra", "graph", "purview", "invented"]},
             {"answer": "", "source_ids": []},
             {"answer": "x" * 6001, "source_ids": []},
         ):
             with self.subTest(data_length=len(data["answer"])), self.assertRaises(ValidationError):
                 DraftAnswer.model_validate(data)
+
+    def test_valid_references_are_deduplicated_and_capped_without_losing_answer(self) -> None:
+        with self.assertLogs("backend", level="WARNING") as logs:
+            draft = DraftAnswer(
+                answer="Explicação válida sobre Microsoft Agent 365.",
+                source_ids=["agent365", "entra", "agent365", "purview", "defender"],
+            )
+        self.assertEqual(draft.source_ids, ["agent365", "entra", "purview"])
+        self.assertIn("Explicação válida", draft.answer)
+        self.assertIn("source_ids_normalized", "\n".join(logs.output))
 
     def test_classifier_and_validator_are_strict(self) -> None:
         for data in (
@@ -341,6 +404,37 @@ class SchemaTests(unittest.TestCase):
 
 
 class AzureSdkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reasoning_is_answer_only_and_validator_receives_same_evidence(self) -> None:
+        client = MagicMock(spec=AsyncAzureOpenAI)
+        client.chat.completions.create = AsyncMock(side_effect=[
+            completion('{"decision":"allow","clarification":""}'),
+            completion('{"answer":"Agent 365 gerencia e governa agentes de IA.","source_ids":["agent365"]}'),
+            completion('{"answer":"Agent 365 apoia gestão, governança e segurança.","source_ids":["agent365"]}'),
+            completion('{"within_scope":true,"follows_instructions":true,"appropriately_cautious":true}'),
+        ])
+        model = AzureMicrosoftModel(Settings(
+            azure_deployment="existing", azure_reasoning_effort="medium"
+        ))
+        request = ChatRequest(message="Agent 365")
+        with patch.object(model, "_client", return_value=client):
+            await model.classify(request)
+            draft = await model.generate(request)
+            revised = await model.revise(request, draft)
+            await model.validate(request, revised)
+        calls = client.chat.completions.create.call_args_list
+        self.assertEqual([call.kwargs["max_completion_tokens"] for call in calls], [1024, 4096, 4096, 1024])
+        self.assertNotIn("reasoning_effort", calls[0].kwargs)
+        self.assertNotIn("reasoning_effort", calls[3].kwargs)
+        self.assertEqual(calls[1].kwargs["reasoning_effort"], "medium")
+        self.assertEqual(calls[2].kwargs["reasoning_effort"], "medium")
+        generator_context = json.loads(calls[1].kwargs["messages"][1]["content"])
+        validator_context = json.loads(calls[3].kwargs["messages"][1]["content"])
+        self.assertEqual(
+            validator_context["references"]["agent365"],
+            generator_context["references"]["agent365"],
+        )
+        self.assertIn("reviewed_on", validator_context["references"]["agent365"])
+
     async def test_client_configuration_and_lifecycle_without_network(self) -> None:
         model = AzureMicrosoftModel(Settings(
             azure_endpoint="https://example.openai.azure.com",

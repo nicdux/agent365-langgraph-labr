@@ -15,6 +15,7 @@ from openai import (
     APITimeoutError, AsyncAzureOpenAI, BadRequestError, OpenAIError, RateLimitError,
 )
 from openai.types.chat import ChatCompletionMessageParam
+from openai.types.chat.completion_create_params import CompletionCreateParamsNonStreaming
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.config import Settings
@@ -23,6 +24,7 @@ from backend.guardrails import (
     DOMAIN_REFUSAL,
     MAX_ANSWER_CHARS,
     OFFICIAL_REFERENCES,
+    REVISION_PROMPT,
     SAFETY_RESPONSE,
     SYSTEM_PROMPT,
     UNCERTAIN_RESPONSE,
@@ -102,6 +104,8 @@ class MicrosoftModel(Protocol):
 
     async def generate(self, request: ChatRequest) -> DraftAnswer: ...
 
+    async def revise(self, request: ChatRequest, draft: DraftAnswer) -> DraftAnswer: ...
+
     async def validate(
         self, request: ChatRequest, draft: DraftAnswer
     ) -> ResponseVerdict: ...
@@ -165,16 +169,17 @@ class AzureMicrosoftModel:
     async def _structured(
         self, prompt: str, payload: dict[str, object],
         response_type: type[ModelT], tokens: int,
+        *, use_answer_reasoning: bool = False,
     ) -> ModelT:
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": prompt},
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
-        completion = await self._client().chat.completions.create(
-            model=self.settings.azure_deployment,
-            messages=messages,
-            max_completion_tokens=tokens,
-            response_format={
+        parameters: CompletionCreateParamsNonStreaming = {
+            "model": self.settings.azure_deployment,
+            "messages": messages,
+            "max_completion_tokens": tokens,
+            "response_format": {
                 "type": "json_schema",
                 "json_schema": {
                     "name": response_type.__name__,
@@ -182,7 +187,10 @@ class AzureMicrosoftModel:
                     "schema": response_type.model_json_schema(),
                 },
             },
-        )
+        }
+        if use_answer_reasoning and self.settings.azure_reasoning_effort is not None:
+            parameters["reasoning_effort"] = self.settings.azure_reasoning_effort
+        completion = await self._client().chat.completions.create(**parameters)
         if not completion.choices:
             raise ValueError("Resposta estruturada ausente.")
         choice = completion.choices[0]
@@ -201,7 +209,20 @@ class AzureMicrosoftModel:
         return await self._structured(
             SYSTEM_PROMPT,
             {"conversation": request.model_dump(), "references": OFFICIAL_REFERENCES},
-            DraftAnswer, 2048,
+            DraftAnswer, 4096 if self.settings.azure_reasoning_effort else 2048,
+            use_answer_reasoning=True,
+        )
+
+    async def revise(self, request: ChatRequest, draft: DraftAnswer) -> DraftAnswer:
+        return await self._structured(
+            SYSTEM_PROMPT + REVISION_PROMPT,
+            {
+                "conversation": request.model_dump(),
+                "candidate": draft.model_dump(),
+                "references": OFFICIAL_REFERENCES,
+            },
+            DraftAnswer, 4096 if self.settings.azure_reasoning_effort else 2048,
+            use_answer_reasoning=True,
         )
 
     async def validate(
@@ -209,7 +230,13 @@ class AzureMicrosoftModel:
     ) -> ResponseVerdict:
         return await self._structured(
             VALIDATOR_PROMPT,
-            {"conversation": request.model_dump(), "candidate": draft.model_dump()},
+            {
+                "conversation": request.model_dump(),
+                "candidate": draft.model_dump(),
+                "references": {
+                    source_id: OFFICIAL_REFERENCES[source_id] for source_id in draft.source_ids
+                },
+            },
             ResponseVerdict, 1024,
         )
 
@@ -243,13 +270,22 @@ class EduardoAssistant:
             draft = DraftAnswer(answer=topic.clarification, source_ids=[])
         else:
             draft = await self.model.generate(request)
-        verdict = await self.model.validate(request, draft)
-        if not verdict.within_scope or not verdict.follows_instructions:
-            self._record("output_blocked")
-            return ChatResponse(answer=DOMAIN_REFUSAL, sources=[], grounded=False)
-        if not verdict.appropriately_cautious or not has_only_verified_links(draft.answer):
-            self._record("output_uncertain")
-            return ChatResponse(answer=UNCERTAIN_RESPONSE, sources=[], grounded=False)
+        for attempt in range(2):
+            verdict = await self.model.validate(request, draft)
+            if not verdict.within_scope or not verdict.follows_instructions:
+                self._record("output_blocked")
+                return ChatResponse(answer=DOMAIN_REFUSAL, sources=[], grounded=False)
+            verified_links = has_only_verified_links(draft.answer)
+            if verdict.appropriately_cautious and verified_links:
+                break
+            self._record("output_uncertain_factual" if not verdict.appropriately_cautious
+                         else "output_unverified_links")
+            if attempt == 0 and topic.decision == "allow":
+                self._record("answer_revision")
+                draft = await self.model.revise(request, draft)
+            else:
+                self._record("output_uncertain")
+                return ChatResponse(answer=UNCERTAIN_RESPONSE, sources=[], grounded=False)
         self._record("clarification" if topic.decision == "clarify" else "answer_validated")
         return ChatResponse(
             answer=draft.answer,

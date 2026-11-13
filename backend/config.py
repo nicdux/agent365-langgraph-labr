@@ -19,6 +19,7 @@ class Settings(BaseModel):
     azure_deployment: str = ""
     azure_api_version: str = "2024-10-21"
     azure_auth_mode: Literal["auto", "default", "managed_identity", "api_key"] = "auto"
+    azure_reasoning_effort: Literal["low", "medium", "high"] | None = None
     azure_api_key: str = Field(default="", repr=False)
     managed_identity_client_id: str | None = None
     timeout_seconds: float = Field(default=30, ge=1, le=60)
@@ -78,6 +79,7 @@ class Settings(BaseModel):
             "azure_deployment": "AZURE_OPENAI_DEPLOYMENT_NAME",
             "azure_api_version": "AZURE_OPENAI_API_VERSION",
             "azure_auth_mode": "AZURE_OPENAI_AUTH_MODE",
+            "azure_reasoning_effort": "AZURE_OPENAI_REASONING_EFFORT",
             "azure_api_key": "AZURE_OPENAI_API_KEY",
             "managed_identity_client_id": "AZURE_MANAGED_IDENTITY_CLIENT_ID",
             "timeout_seconds": "EDUARDO_TIMEOUT_SECONDS",

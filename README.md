@@ -78,6 +78,13 @@ como o agente original. Use `az login --tenant SEU-TENANT-ID` e atribua
 **Cognitive Services OpenAI User** à identidade utilizada. Não é necessário
 configurar o Agent 365 para abrir a interface web.
 
+Para modelos que aceitam raciocínio, como o GPT-5.4-mini, configure
+`AZURE_OPENAI_REASONING_EFFORT=medium` para priorizar qualidade de geração.
+`low` e `high` também são aceitos. Deixe vazio em deployments sem suporte
+ao parâmetro. A opção afeta somente geração/revisão, não a classificação
+ou o validador, e aumenta o orçamento dessas etapas para 4.096 tokens,
+incluindo raciocínio. Pode elevar latência e consumo; não cria outro modelo.
+
 ### Domínio Microsoft e defesa em camadas
 
 **Não existe scraping nem importação automática do LinkedIn.** O endereço
@@ -99,7 +106,12 @@ deployment** nas três etapas:
    principal, com as instruções de domínio e comportamento.
 3. **Validação independente da saída:** outra chamada estruturada verifica
    domínio, respeito às instruções e cautela factual antes da liberação.
-   A validação também se aplica a pedidos de esclarecimento.
+   O validador recebe as mesmas evidências das referências selecionadas pelo
+   gerador. A validação também se aplica a pedidos de esclarecimento.
+4. **Revisão limitada de qualidade:** se uma resposta dentro do domínio
+   tiver problema factual ou link não verificado, o modelo pode produzir
+   uma única versão corrigida, que é validada novamente. Desvios de domínio,
+   injection e content filtering não autorizam essa revisão.
 
 As instruções e schemas ficam em
 [backend/guardrails.py](backend/guardrails.py). Perguntas e histórico são
@@ -119,8 +131,10 @@ Para perguntas claramente fora do domínio, a resposta é exatamente:
 ### Referências, precisão e limitações
 
 O catálogo em [backend/guardrails.py](backend/guardrails.py) contém URLs
-Microsoft Learn verificadas e resumos curtos. O modelo escolhe somente IDs
-desse catálogo; o servidor monta as referências. Links inventados na prosa
+Microsoft Learn verificadas e resumos revisados. O modelo escolhe somente IDs
+desse catálogo; o servidor monta as referências. IDs conhecidos repetidos ou
+em excesso são normalizados e limitados a três, com aviso de metadados; IDs
+desconhecidos continuam inválidos. Links inventados na prosa
 impedem a liberação da resposta. Endpoints técnicos em código permanecem
 permitidos. No navegador, links de Markdown também se limitam às referências
 HTTPS retornadas pelo servidor.
@@ -128,7 +142,11 @@ HTTPS retornadas pelo servidor.
 **Não há busca web ou RAG em tempo real.** Referências são documentação
 relacionada, não uma alegação de leitura integral dessas páginas. O campo
 `grounded` permanece `false` por compatibilidade: o chat não declara
-fundamentação documental completa. Mudanças recentes, preços, licenciamento
+fundamentação documental completa. O resumo de Agent 365 foi ampliado com
+fatos da visão geral oficial revisada em 13/11/2026, incluindo os quatro
+pilares e o papel de Entra, Purview e Defender. Gerador e validador usam
+esse mesmo contexto; explicações introdutórias corretas não exigem informar
+uma versão para serem aceitas. Mudanças recentes, preços, licenciamento
 e status preview/GA exigem consulta e confirmação na documentação atual.
 
 Os validadores semânticos são probabilísticos e usam o mesmo deployment:
@@ -195,15 +213,16 @@ do host; ele não substitui os exportadores Agent 365 do agente de terminal.
 | Corpo HTTP | 64 KiB |
 | Perfil manual preservado | 128 KiB; não usado como fonte técnica |
 | Resposta | Até 6.000 caracteres e 3 referências oficiais |
-| Tokens por etapa | Classificação 1.024; geração 2.048; validação 1.024 |
+| Tokens por etapa | Classificação 1.024; geração/revisão 2.048, ou 4.096 com raciocínio; validação 1.024 |
 | Timeout total do fluxo | Padrão 30 s; configurável entre 1 e 60 s |
 | Frequência | 20 perguntas/minuto por usuário (ou loopback local) |
 | Concorrência | Até 4 turnos simultâneos por processo |
 
 O limitador é em memória e por processo. Antes de escalar para várias
 instâncias/workers, adicione limitação compartilhada no gateway e mantenha
-limites de custo e quotas no Azure OpenAI. Uma resposta aceita usa três
-chamadas ao mesmo deployment; recusas iniciais usam uma. Quotas do provedor
+limites de custo e quotas no Azure OpenAI. O fluxo normal usa três chamadas
+ao mesmo deployment; uma revisão de qualidade pode elevar o total para
+cinco, sempre dentro do timeout total. Recusas iniciais usam uma. Quotas do provedor
 podem ser menores que o limite local. HTTP 429 do provedor é apresentado
 explicitamente com orientação de espera, nunca como recusa de domínio.
 
@@ -259,7 +278,7 @@ larguras, contraste mínimo 4,5:1, foco/hover, teclado, loading, Markdown,
 sanitização, cópia, persistência, cancelamento e erros.
 
 Há também uma suíte real opt-in em
-[tests/test_azure_live.py](tests/test_azure_live.py), com 13 cenários, usando
+[tests/test_azure_live.py](tests/test_azure_live.py), com 15 cenários, usando
 somente perguntas sintéticas e o deployment configurado:
 
 ```powershell
@@ -273,6 +292,12 @@ e codificados, histórico adulterado, follow-ups e validação independente da
 saída. Content filtering nativo é aceito como bloqueio de ataques, nunca
 desabilitado para fazer o teste passar. A suíte fica desativada por padrão
 porque **consome quota Azure**. Não use dados reais ou segredos nos casos.
+Inclui as regressões "me explique sobre Microsoft Agent 365?" e "Agent 365"
+após uma resposta anterior de incerteza: as respostas devem explicar o
+produto, apresentar seus pilares e incluir a referência oficial. Essa
+cobertura é avaliada semanticamente, aceitando sinônimos, não pela presença
+de palavras exatas. O avaliador usa o mesmo deployment e também tem
+limitações probabilísticas; os testes não substituem revisão humana.
 Somente a suíte real pode aguardar e repetir uma vez após HTTP 429,
 respeitando `Retry-After` até 120 s. Não há retentativa para content filtering;
 a API interativa continua apresentando a quota explicitamente ao usuário.
