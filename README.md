@@ -189,10 +189,14 @@ python agent.py
 
 Voce > Qual a temperatura em Sao Paulo?
 
-Agente > A temperatura em São Paulo é 21,4 °C.
+Agente > A temperatura em São Paulo é 21,4 °C. (1.3s)
 ```
 
-Comandos: `/sair`, `/novo`, `/ajuda` e `/purview`.
+Comandos: `/sair`, `/novo`, `/limpar`, `/ajuda` e `/purview`.
+
+O terminal usa cores ANSI (desativadas automaticamente se a saída não for
+um console interativo, ou definindo a variável `NO_COLOR`) e mostra o tempo
+de resposta de cada turno.
 
 O `/purview` envia um prompt com **registros fictícios** contendo dados que
 parecem sensíveis — números de documento, telefones e endereços. Serve para

@@ -104,6 +104,47 @@ CANAL_TERMINAL = Channel(name="terminal")
 _conversa_atual = ContextVar("a365_conversation_id", default=None)
 
 
+# ---------------------------------------------------------------------------
+# Cores do terminal (ANSI)
+# ---------------------------------------------------------------------------
+# Desativa sozinho se a saida nao for um terminal (ex.: redirecionada para
+# arquivo) ou se a variavel NO_COLOR estiver definida.
+_COR_ATIVA = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+if _COR_ATIVA and os.name == "nt":
+    # Habilita o processamento de sequencias ANSI no console do Windows.
+    os.system("")
+
+
+def _cor(codigo, texto):
+    if not _COR_ATIVA:
+        return texto
+    return "\033[" + codigo + "m" + texto + "\033[0m"
+
+
+def cor_titulo(texto):
+    return _cor("1;36", texto)  # ciano negrito
+
+
+def cor_pergunta(texto):
+    return _cor("1;37", texto)  # branco negrito
+
+
+def cor_resposta(texto):
+    return _cor("1;32", texto)  # verde negrito
+
+
+def cor_aviso(texto):
+    return _cor("33", texto)  # amarelo
+
+
+def cor_erro(texto):
+    return _cor("1;31", texto)  # vermelho negrito
+
+
+def cor_discreto(texto):
+    return _cor("90", texto)  # cinza
+
+
 def _criar_request(conteudo, conversa=None):
     conversa = conversa or _conversa_atual.get()
     return Request(
@@ -569,6 +610,7 @@ AJUDA = """
 Comandos:
   /sair     encerra o chat
   /novo     comeca uma conversa nova
+  /limpar   limpa a tela do terminal
   /purview  envia um prompt com dados sinteticos sensiveis,
             para demonstrar a deteccao no Microsoft Purview
   /ajuda    mostra esta mensagem
@@ -599,10 +641,11 @@ def mascarar(valor):
 
 
 def abrir_banner():
+    linha = cor_discreto("=" * 68)
     print()
-    print("=" * 68)
-    print("  Microsoft Agent 365 - Agente de laboratorio")
-    print("=" * 68)
+    print(linha)
+    print(cor_titulo("  Microsoft Agent 365 - Agente de laboratorio"))
+    print(linha)
     print("  Agente   :", AGENT_NAME)
     print("  Agent ID :", mascarar(AGENT_ID))
     print("  Tenant   :", mascarar(TENANT_ID))
@@ -613,7 +656,7 @@ def abrir_banner():
         print("  Purview   : avaliacao ativa (" + modo + ")")
     else:
         print("  Purview   : desativado (PURVIEW_ENABLED=false)")
-    print("=" * 68)
+    print(linha)
     print(AJUDA)
 
 
@@ -622,16 +665,16 @@ def conversar():
 
     avisos = _validar_atribuicao()
     if avisos:
-        print("  Aviso: atribuicao do chamador incompleta ->", ", ".join(avisos))
-        print("  O agente funciona, mas o Defender nao sabera quem pediu.")
+        print(cor_aviso("  Aviso: atribuicao do chamador incompleta -> " + ", ".join(avisos)))
+        print(cor_aviso("  O agente funciona, mas o Defender nao sabera quem pediu."))
         print()
 
     print("Validando credenciais...", end=" ", flush=True)
     try:
         token_resolver(AGENT_ID, TENANT_ID)
-        print("ok")
+        print(cor_resposta("ok"))
     except Exception as erro:
-        print("FALHOU")
+        print(cor_erro("FALHOU"))
         print()
         print(erro)
         print()
@@ -646,7 +689,7 @@ def conversar():
 
     while True:
         try:
-            pergunta = input("Voce > ").strip()
+            pergunta = input(cor_pergunta("Voce > ")).strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
@@ -657,6 +700,9 @@ def conversar():
             break
         if pergunta.lower() == "/ajuda":
             print(AJUDA)
+            continue
+        if pergunta.lower() == "/limpar":
+            os.system("cls" if os.name == "nt" else "clear")
             continue
         if pergunta.lower() == "/purview":
             pergunta = PROMPT_PURVIEW
@@ -688,13 +734,15 @@ def conversar():
                     escopo.record_output_messages(MSG_PROMPT_BLOQUEADO)
                     _registrar_saida(pergunta, MSG_PROMPT_BLOQUEADO, conversa)
                     print()
-                    print("Agente >", MSG_PROMPT_BLOQUEADO)
+                    print(cor_resposta("Agente >"), MSG_PROMPT_BLOQUEADO)
                     print()
                     sequencia += 2
                     continue
 
                 historico.append(("user", pergunta))
+                inicio = time.monotonic()
                 resultado = agente.invoke({"messages": historico})
+                duracao = time.monotonic() - inicio
                 historico = resultado["messages"]
                 resposta = historico[-1].content
 
@@ -708,14 +756,14 @@ def conversar():
                 sequencia += 2
         except Exception as erro:
             print()
-            print("Erro ao processar:", erro)
+            print(cor_erro("Erro ao processar:"), erro)
             print()
             continue
         finally:
             _conversa_atual.reset(token_conversa)
 
         print()
-        print("Agente >", resposta)
+        print(cor_resposta("Agente >"), resposta, cor_discreto(f"({duracao:.1f}s)"))
         print()
 
     print("Enviando telemetria pendente...", end=" ", flush=True)
